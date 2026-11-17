@@ -179,11 +179,19 @@ tell an edge from luck.
    dollars or a profit figure. Compare honestly: did the "leans to target"
    group beat the others, and is the real T share near the predicted one?
    With fewer than 60 plans, say it is too early to tell.
-   - The scorecard lives in `journal/morning-scorecard.csv` in the repo. A
-     cloud container is thrown away after the session, so if the user has
-     agreed to keep it in git, commit that one file and push it to the
-     current branch after each review. Otherwise remind them it is only in
-     this container.
+   - **Commit the scorecard after every review, without asking** (the user
+     asked for this on 2026-11-17). The scorecard is
+     `journal/morning-scorecard.csv`; a cloud container is thrown away
+     after the session, so git is where it lasts. Commit that one file only
+     (`git add journal/morning-scorecard.csv`), message "Scorecard:
+     <date>, <n> plans", with the session's commit trailers, and push it to
+     the session's working branch (retry network errors up to 4 times with
+     backoff). Never commit anything else from `trader/` (it can hold the
+     SEC contact line). Tell the user it was committed, with the commit id.
+   - The running totals only cover the rows in this checkout. A new session
+     starts from the default branch, so days scored on another branch count
+     only once that branch is merged. If the scorecard has no earlier days
+     than today, say so instead of calling it the whole record.
 
 ## Needs
 
