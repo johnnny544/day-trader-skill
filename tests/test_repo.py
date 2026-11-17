@@ -14,6 +14,10 @@ ABOUT = ("11 Claude skills for day trading: scan thousands of charts, track brea
 # skills on the way to an order carry the safety block
 ORDER_PATH = ["trader-scanner", "trader-entry", "trader-exit", "trader-timemachine", "trader-budget",
               "trader-pelosi", "trader-risk", "trader-broker", "trader-alerts"]
+# added on top of the pack: the morning routine that chains the eleven
+ADDED = ["trader-morning"]
+# runtime folders: trader/ is git-ignored, journal/ holds trader-morning's scorecard
+RUNTIME = ["trader", "journal"]
 V1_ONLY = ["trader-copycat", "trader-screener", "trader-tax", "trader-rebalance"]
 
 
@@ -36,14 +40,14 @@ class Repo(unittest.TestCase):
     def test_eleven_skill_folders_at_the_root(self):
         found = sorted(d for d in os.listdir(ROOT)
                        if os.path.isfile(os.path.join(ROOT, d, "SKILL.md")))
-        self.assertEqual(found, sorted(SKILLS))
+        self.assertEqual(found, sorted(SKILLS + ADDED))
 
     def test_root_matches_the_reel(self):
-        root = sorted(d for d in os.listdir(ROOT) if not d.startswith(".git"))
-        self.assertEqual(root, sorted([".claude-plugin", "LICENSE", "README.md", "tests"] + SKILLS))
+        root = sorted(d for d in os.listdir(ROOT) if not d.startswith(".git") and d not in RUNTIME)
+        self.assertEqual(root, sorted([".claude", ".claude-plugin", "LICENSE", "README.md", "tests"] + SKILLS + ADDED))
 
     def test_frontmatter_name_and_description(self):
-        for s in SKILLS:
+        for s in SKILLS + ADDED:
             fm, text = frontmatter(os.path.join(ROOT, s, "SKILL.md"))
             self.assertIn("name: %s\n" % s, fm + "\n", s)
             self.assertRegex(fm, r"description: ", s)
@@ -51,7 +55,7 @@ class Repo(unittest.TestCase):
             self.assertGreater(len(text.splitlines()), 60, s)
 
     def test_order_path_skills_carry_the_safety_rule(self):
-        for s in ORDER_PATH:
+        for s in ORDER_PATH + ADDED:
             _, text = frontmatter(os.path.join(ROOT, s, "SKILL.md"))
             low = " ".join(text.lower().split())
             self.assertIn("not financial advice", low, s)
