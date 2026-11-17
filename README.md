@@ -72,7 +72,7 @@ or in the `SEC_USER_AGENT` environment variable.
 | `/trader-alerts` | Price Alerts | Rings when a price, a stop or the opening bell hits. |
 | `/trader-analyst` | Earnings Analyst | Reads earnings reports and sums up what changed. |
 | `/trader-pelosi` | Pelosi Tracker | Reads Congress's stock-trade disclosures the minute they are filed. |
-| `/trader-morning` | Morning Routine | Runs the morning in one go: daily scan, the 10:15 opening-range scan with your filters, then news, earnings, entry, exit plan and the Time Machine on each hit, listed most probable first. |
+| `/trader-morning` | Morning Routine | Runs the day in one go: daily scan, the 10:15 opening-range scan with your filters, then news, earnings, entry, exit plan and the Time Machine on each hit, grouped by how they lean; after the close it scores every plan against what really happened. |
 
 ## How to use it
 
@@ -139,7 +139,8 @@ python3 trader-budget/size.py --write                                  # -> trad
 python3 trader-risk/check.py                                           # PASS / BLOCK per order
 python3 trader-broker/ticket.py show                                   # the tickets, READY or not
 python3 trader-alerts/alerts.py add --from-plan                        # stop, target, flat by close
-python3 trader-morning/morning.py run                                  # 10:15: scan -> news -> entry -> exit -> timemachine, ranked
+python3 trader-morning/morning.py run                                  # 10:15: scan -> news -> entry -> exit -> timemachine, grouped
+python3 trader-morning/morning.py review                               # after the close: score the plans, update the scorecard
 python3 trader-alerts/alerts.py check                                  # rings what hit, once
 python3 trader-analyst/facts.py TSLA                                   # quarters, growth, EPS
 python3 trader-pelosi/ptr.py index --member pelosi                     # her PTRs this year
