@@ -302,9 +302,38 @@ def cmd_run(a, rules):
     return 0
 
 
+def cmd_status(a, rules):
+    """Where the day stands, so Claude decides premarket / schedule / run from the script, not by hand."""
+    now = ny_now(a.now)
+    day = now.date()
+    ok, why = S.trading_day(day)
+    s = S.session(day)
+    run_at = datetime.datetime.combine(day, S.parse_hhmm(rules["run_at"]))
+    cfg = S.read_config(os.path.join(TRADER, "config.json"))
+    until = datetime.datetime.combine(day, S.parse_hhmm(cfg.get("no_entries_after") or "15:30", "--until"))
+    if not ok:
+        phase = "closed"
+    elif now.time() < s[0]:
+        phase = "premarket"          # before 9:30: run premarket, then schedule the run_at run
+    elif now < run_at:
+        phase = "before_run"         # open, but before run_at: nothing is scheduled
+    elif now < until and now.time() < s[1]:
+        phase = "run"                # run now
+    else:
+        phase = "after_entries"      # too late for a new opening-range entry today
+    daily = os.path.join(TRADER, "watchlist-daily-%s.json" % day.isoformat())
+    print(json.dumps({
+        "now_et": now.strftime("%Y-%m-%d %H:%M"), "weekday": now.strftime("%A"), "trading_day": ok,
+        "closed_reason": why or None, "phase": phase, "opens": "09:30", "run_at_et": run_at.strftime("%Y-%m-%d %H:%M"),
+        "run_at_utc": S.eastern_to_utc(run_at).strftime("%Y-%m-%dT%H:%M:00Z"),
+        "no_entries_after": until.strftime("%H:%M"),
+        "daily_list": os.path.relpath(daily, ROOT) if os.path.exists(daily) else None}, indent=1))
+    return 0
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("command", choices=["premarket", "run"])
+    p.add_argument("command", choices=["status", "premarket", "run"])
     p.add_argument("--rules", default=os.path.join(HERE, "rules.json"))
     p.add_argument("--daily", help="daily list to scan (default trader/watchlist-daily-<today>.json)")
     p.add_argument("--now", help='pin the clock, New York time, e.g. "2026-11-16 10:15"')
@@ -312,6 +341,8 @@ def main():
     p.add_argument("--offline", help="saved Yahoo 5-minute charts for the scan (tests)")
     a = p.parse_args()
     rules = load_rules(a.rules)
+    if a.command == "status":
+        return cmd_status(a, rules)
     if a.command == "premarket":
         premarket(rules, a.now)
         return 0

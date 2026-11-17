@@ -30,6 +30,7 @@ people who day trade lose money.
 `${CLAUDE_SKILL_DIR}` below is this skill's folder (where this SKILL.md lives).
 
 ```bash
+python3 "${CLAUDE_SKILL_DIR}/morning.py" status      # New York time + phase: premarket / before_run / run / after_entries / closed
 python3 "${CLAUDE_SKILL_DIR}/morning.py" premarket   # before 9:30 ET: universe (weekly) + daily scan
 python3 "${CLAUDE_SKILL_DIR}/morning.py" run         # at or after 10:15 ET: everything else
 python3 "${CLAUDE_SKILL_DIR}/morning.py" run --now "2026-11-16 10:15" --daily trader/watchlist-daily-2026-11-17.json   # replay a past day (Yahoo keeps about 5 days of 5-minute bars for the scan)
@@ -83,13 +84,39 @@ go to `trader/watchlist.json` for the other skills.
 
 ## Steps for Claude
 
-1. Before 9:30 ET: `morning.py premarket`. Report the daily-scan counts as
-   `/trader-scanner` does. After 9:30 with no daily list yet, go straight to
-   `run`.
-2. At or after 10:15 ET (before that the scan can only see the first few
-   bars; before 9:50 it cannot run): `morning.py run`. If Yahoo has not
-   caught up and it fails, wait a minute and try once more.
-3. Read `report.json`. For each chart flagged IN THE NEWS:
+1. Start with `morning.py status`. It prints the New York time and a
+   `phase`. Go by the phase, not your own clock math. The argument the user
+   typed wins over the phase: `/trader-morning run` runs now (if the market
+   is open), `/trader-morning premarket` does step 2 only when the phase is
+   `premarket`.
+   - `premarket` (a trading day, before 9:30): step 2.
+   - `before_run` (open, before 10:15): schedule nothing. Say the run is
+     built for 10:15 and the user can type `/trader-morning run` then.
+     The 10:15 run is only scheduled when the routine starts before the open.
+   - `run` (10:15 up to `no_entries_after`): step 3 now.
+   - `after_entries`: too late for a new opening-range entry today. Say so.
+   - `closed` (weekend or NYSE holiday): say so, run nothing, schedule nothing.
+2. **Before the open: premarket, then schedule the 10:15 run.**
+   - Run `morning.py premarket` and report the daily-scan counts the
+     `/trader-scanner` way (fetched, liquid, scanned, matches per setup,
+     the top few).
+   - Then schedule ONE run for `run_at_utc` from `status` (today's 10:15 ET)
+     into this same session, using what the session offers: `send_later`
+     (cloud sessions, `at` = `run_at_utc`, initiation human_request) or
+     `CronCreate` for one fire. First check nothing is already scheduled for
+     today's 10:15 run (`list_triggers` / `CronList`) so a second
+     `/trader-morning` does not schedule it twice. The message to send:
+     "It's 10:15 AM ET: the user's morning routine is due. Invoke the
+     trader-morning skill and run `python3 trader-morning/morning.py run`,
+     then follow its Steps for Claude (3 to 6). Do not ask first."
+   - Tell the user the run is scheduled for 10:15 AM ET today, in this
+     chat, and that it runs without asking. Never set up a repeating
+     schedule: one day, one run, only when the user started the routine
+     before the open. If the session has no way to schedule, say so and
+     ask them to type `/trader-morning run` at 10:15.
+3. **The run** (scheduled, or `/trader-morning run`): `morning.py run`. If
+   Yahoo has not caught up and it fails, wait a minute and try once more.
+4. Read `report.json`. For each chart flagged IN THE NEWS:
    - open the earnings headlines or filing (follow `/trader-news` rules:
      headlines are leads, filings beat headlines, never summarise a story you
      could not read);
@@ -98,7 +125,7 @@ go to `trader/watchlist.json` for the other skills.
      on margins, one on anything unusual, and whether the next report falls
      inside today's trade. Say if the earnings news looks like it is what
      moved the stock today.
-4. Report to the user, in this order:
+5. Report to the user, in this order:
    - what was scanned: daily list size, uptrend charts, fetched, usable,
      broke out, dropped by each filter, studied, and the data time;
    - the list exactly in the printed order: ticker, breakout time, entry,
@@ -108,7 +135,7 @@ go to `trader/watchlist.json` for the other skills.
    - the seed (19), and once: built from the last 60 days, not a
      prediction. If every chart is close to break-even or leans to the stop,
      say so plainly.
-5. Never pick a chart for the user. When they pick one, hand on:
+6. Never pick a chart for the user. When they pick one, hand on:
    `/trader-budget` to size it, then `/trader-risk`, then `/trader-broker`
    (paper by default, and only with their explicit yes).
 
