@@ -315,6 +315,72 @@ def pick_stop(row, rules):
                                   "under the entry" % (mid_pct, low_pct, floor_pct, floor_pct))
 
 
+def quiet_plan(row, rules, entry_time):
+    """The same levels trader-exit would set (stop rounded down to the cent, target half up), for the review."""
+    entry, oh, ol = row["last"], row["or_high"], row["or_low"]
+    rule, why = pick_stop(row, rules)
+    if rule == "or-mid":
+        stop = math.floor((oh + ol) / 2 * 100) / 100
+    elif rule == "or-low":
+        stop = math.floor(ol * 100 + 1e-9) / 100
+    else:
+        stop = math.floor(entry * (1 - float(rule.split(":")[1]) / 100) * 100) / 100
+    risk = round(entry - stop, 2)
+    if risk <= 0:
+        return {"error": "no room for a stop under the entry"}
+    r = float(str(rules["target"]).rstrip("Rr"))
+    target = math.floor((entry + r * risk) * 100 + 0.5) / 100
+    return {"entry": entry, "entry_time": entry_time, "stop": stop, "stop_rule": rule.replace("-", "_"),
+            "target": target, "target_r": r, "risk_per_share": risk, "flat_by": rules["flat_by"], "stop_why": why,
+            "risk_pct": round(risk / entry * 100, 2), "cost_r": round(entry * rules["cost_pct"] / 100 / risk, 3),
+            "quiet": True}
+
+
+def ny_clock(iso):
+    try:
+        dt = datetime.datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        et = S.to_eastern(dt.astimezone(datetime.timezone.utc).replace(tzinfo=None))
+        return et.strftime("%b %d ") + S.clock_label(et)
+    except Exception:
+        return iso or "-"
+
+
+def print_light(report, rules):
+    results = report["results"]
+    print("The %d most traded charts that passed every rule, most traded first, with their news (last %d hours):"
+          % (len(results), rules["news_hours"]))
+    for n, x in enumerate(results, 1):
+        sc, nw = x["scan"], x.get("news") or {}
+        mv = nw.get("move") or {}
+        print("%d. %-6s broke out %s, now $%s (%+.2f%% over the range high $%s), range %.2f%% wide, breakout bar "
+              "%sx the range's volume. %s%s"
+              % (n, x["symbol"], sc.get("at", "-"), "{:,.2f}".format(sc["last"]), sc["over_now"], sc["or_high"],
+                 sc["width_pct"], sc.get("volume_x") or "-", x.get("sector") or "sector n/a",
+                 "" if mv.get("pct") is None else ", %+.2f%% vs yesterday's close" % mv["pct"]))
+        print("   daily setup: %s" % ", ".join(sc.get("daily_setups") or []))
+        if x["earnings"]["reported"]:
+            print("   EARNINGS: " + "; ".join(x["earnings"]["why"]))
+        items = nw.get("items") or []
+        if nw.get("error"):
+            print("   news: could not fetch (%s)" % nw["error"])
+        elif not items:
+            print("   news: nothing in the last %d hours" % rules["news_hours"])
+        for it in items[:rules.get("news_per_chart", 3)]:
+            print("   %s  %s%s" % (ny_clock(it.get("time") or ""), it.get("title") or "",
+                                    "  [%s]" % ", ".join(it["tags"]) if it.get("tags") else ""))
+            if it.get("link"):
+                print("      %s" % it["link"])
+    if report["sector_clusters"]:
+        print("Same sector: " + "; ".join("%s: %s" % (k, ", ".join(v)) for k, v in report["sector_clusters"].items()))
+    if not report["sec_user_agent_set"]:
+        print("SEC filings were skipped: no SEC User-Agent (SEC_USER_AGENT or trader/config.json).")
+    print("Wrote %s and trader/watchlist.json." % os.path.relpath(
+        os.path.join(ROOT, report["path"]), ROOT))
+    if not report.get("scored"):
+        print("This is a later run: the review after the close scores the day's first run (report.json), not this one.")
+    print("Next, for any chart: /trader-entry, /trader-exit, /trader-timemachine. " + S.NOTE)
+
+
 def study(row, day, cutoff, rules, folder, sec_ok, now_text, since_utc):
     sym = row["symbol"]
     out = {"symbol": sym, "scan": row}
@@ -340,6 +406,12 @@ def study(row, day, cutoff, rules, folder, sec_ok, now_text, since_utc):
             out["earnings"]["analyst_error"] = ferr
         else:
             out["earnings"]["analyst_error"] = "skipped: no SEC User-Agent (SEC_USER_AGENT or trader/config.json)"
+    if not rules.get("deep_study", True):
+        # Light mode (the user's choice): no entry check, exit plan or Time Machine. The plan levels are
+        # still worked out here, quietly, so the after-close review can score the chart.
+        out["plan"] = quiet_plan(row, rules, entry_time)
+        out["tm"] = {}
+        return out
     # 3. entry check, pinned to the scan time so it agrees with the scan
     ent, err = tool_json("entry", "check", sym, "--json", "--now", pin)
     out["entry"] = {"error": err, "status": (ent or {}).get("status"), "trigger": (ent or {}).get("trigger"),
@@ -409,7 +481,8 @@ def cmd_run(a, rules):
     market = market_line(rules, day, cutoff, a.offline)
     results = []
     for i, r in enumerate(rows, 1):
-        log("  %d/%d %s: sector, news, earnings, entry, exit, time machine..." % (i, len(rows), r["symbol"]))
+        log("  %d/%d %s: %s..." % (i, len(rows), r["symbol"], "sector, news, earnings, entry, exit, time machine"
+                                    if rules.get("deep_study", True) else "sector, news, earnings"))
         results.append(study(r, day, cutoff, rules, folder, sec_ok, a.now, since_utc))
 
     def key(x):
@@ -427,7 +500,14 @@ def cmd_run(a, rules):
               "rules": {k: v for k, v in rules.items() if not k.startswith("_")},
               "daily_list": os.path.relpath(daily, ROOT), "scan": sm, "market": market,
               "sector_clusters": clusters, "sec_user_agent_set": sec_ok, "results": results, "note": S.NOTE}
-    with open(os.path.join(folder, "report.json"), "w") as fh:
+    # The day's first run is the one the review scores (report.json). A later run the same day keeps its own
+    # file, report-HHMM.json, unless --replace.
+    first = os.path.join(folder, "report.json")
+    path = first if (a.replace or not os.path.exists(first)) else os.path.join(
+        folder, "report-%s.json" % cutoff.strftime("%H%M"))
+    report["path"] = os.path.relpath(path, ROOT)
+    report["scored"] = path == first
+    with open(path, "w") as fh:
         json.dump(report, fh, indent=1)
     S.write_json(os.path.join(TRADER, "watchlist.json"),
                  {"created_by": "trader-morning", "mode": "orb", "as_of": "%s %s ET" % (sm["day"], sm["cutoff"]),
@@ -452,11 +532,14 @@ def print_report(report, rules, day, cutoff):
              " (%d failed or had no data)" % sm["failed"] if sm["failed"] else "", sm["usable"], sm["candidates"],
              sm["confirmed"]))
     print("%d broke their opening range. Dropped %d back under the range high, %d more than %.0f%% over, %d range "
-          "wider than %.0f%%, %d breakout bar under %.1fx the range's volume. %d left; studied the %d most traded."
+          "wider than %.0f%%, %d breakout bar under %.1fx the range's volume. %d left; kept the %d most traded."
           % (sm["broke_out"], d["fell_back"], d["extended"], rules["max_over_pct"], d["wide"],
              rules["max_range_width_pct"], d.get("thin", 0), rules.get("min_volume_x") or 0, sm["passed"], sm["kept"]))
     if not results:
         print("No chart passed every rule. Nothing to study.")
+        return
+    if not rules.get("deep_study", True):
+        print_light(report, rules)
         return
     be = next(((x.get("tm") or {}).get("break_even") for x in results if (x.get("tm") or {}).get("break_even")), None)
     print("Plans: entry at the scan's last close, stop %s (at least %.1f%% away), target %s, out by %s. "
@@ -502,7 +585,7 @@ def print_report(report, rules, day, cutoff):
     if not report["sec_user_agent_set"]:
         print("SEC filings and earnings numbers were skipped: no SEC User-Agent (SEC_USER_AGENT or trader/config.json).")
     print("Wrote %s and trader/watchlist.json." % os.path.relpath(
-        os.path.join(TRADER, "morning", day.isoformat(), "report.json"), ROOT))
+        os.path.join(ROOT, report["path"]), ROOT))
     print("Odds come from the last 60 days of each stock's own bars. They are not a prediction. " + S.NOTE)
 
 
@@ -735,6 +818,7 @@ def main():
     p.add_argument("--message", help="publish: the commit title (default \"Scorecard: <date>, <n> plans\")")
     p.add_argument("--trailer", action="append", help="publish: a commit trailer line (repeat for more)")
     p.add_argument("--dry-run", action="store_true", help="publish: commit in the temporary worktree, do not push")
+    p.add_argument("--replace", action="store_true", help="run: replace the day's scored report (report.json)")
     a = p.parse_args()
     rules = load_rules(a.rules)
     if a.command == "status":

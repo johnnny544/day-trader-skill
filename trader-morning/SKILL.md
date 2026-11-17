@@ -4,13 +4,11 @@ description: >-
   The Morning Routine. Runs the whole trading day's routine the same way every
   day: the pre-market daily scan; at 10:15 AM ET the opening-range breakout
   scan over the daily list's uptrend charts with the user's filters
-  (rules.json: extension, range width, breakout volume), then for every chart
-  that passes: sector, news, a strict earnings check (SEC numbers and a review
-  when the company reported), the entry check, an exit plan with a minimum
-  stop distance and the Time Machine, grouped leans-to-target /
-  about-break-even / leans-to-stop under a SPY market line; after the close a
-  review that scores every plan against what really happened and keeps a
-  scorecard. Use when the user says "run my morning routine", "do the 10:15
+  (rules.json: extension, range width, breakout volume), then the 5 most
+  traded charts that pass, each with its sector, its news and a strict
+  earnings check, under a SPY market line (a deep mode adds the entry check,
+  exit plan and Time Machine); after the close a review that scores every
+  chart's default plan against what really happened and keeps a scorecard. Use when the user says "run my morning routine", "do the 10:15
   run", "run the whole pipeline", "review today", "how did the list do",
   "show the scorecard", "/trader-morning", or at the start of a trading day.
 argument-hint: "[premarket | run | review]"
@@ -20,10 +18,14 @@ argument-hint: "[premarket | run | review]"
 
 One command for the routine the user set up on 2026-11-17:
 
-`/trader-scanner` (daily, then orb at 10:15) -> filters -> `/trader-news` ->
-`/trader-analyst` when the company reported -> `/trader-entry` ->
-`/trader-exit` -> `/trader-timemachine` -> one grouped list -> after the
-close, a review against what really happened.
+`/trader-scanner` (daily, then orb at 10:15) -> filters -> the 5 most traded
+charts -> `/trader-news` for each (and `/trader-analyst` when the company
+reported) -> after the close, a review against what really happened.
+
+The user chose this light version on 2026-11-17: just the charts and their
+news. They run `/trader-entry`, `/trader-exit` and `/trader-timemachine`
+themselves on a chart they pick. `"deep_study": true` in rules.json brings
+back the full study of every chart (entry, exit plan, Time Machine, groups).
 
 It reuses those skills' scripts and follows their rules. It never sizes,
 checks or places an order. A chart on the list matched a rule; it is not a
@@ -61,7 +63,9 @@ results: wait until the scorecard has a few weeks.
 | `min_over_pct` / `max_over_pct` | 0 / 1 | at the scan time the last close is at or above the range high and at most 1 % over it |
 | `max_range_width_pct` | 2 | the opening range is at most 2 % of the price |
 | `min_volume_x` | 1.0 | the breakout bar traded at least the opening-range bars' average volume (trader-entry's `--min-volume-x`) |
-| `top` | 10 | the 10 most traded today (price x shares so far) are studied |
+| `top` | 5 | the 5 most traded today (price x shares so far) are listed |
+| `deep_study` | false | false: sector, news and earnings only. true: also the entry check, exit plan and Time Machine, grouped by how they lean |
+| `news_per_chart` | 3 | headlines shown per chart (newest first) |
 | `stop` / `min_stop_pct` | or-mid / 0.5 | midpoint stop, but never closer than 0.5 % to the entry: then the range low, then 0.5 % under the entry |
 | `target` / `flat_by` | 2R / 15:55 | the target and the out-by time for every plan |
 | `cost_pct` | 0.05 | estimated spread and slippage, % of price for a round trip; shown as "after cost" in R |
@@ -71,6 +75,12 @@ results: wait until the scorecard has a few weeks.
 | `scorecard` / `scorecard_branch` | journal/morning-scorecard.csv / main | the record of every scored plan, and the branch `publish` commits it to |
 
 ## What `run` does for each chart
+
+Light mode (the default) does 1 to 3 and prints each chart with its breakout
+time, price, distance over the range high, range width, breakout volume,
+sector, move from yesterday's close, daily setup and up to 3 headlines with
+links. It still works out the default plan levels (step 5's rules) quietly
+in `report.json`, so the review can score the chart. Deep mode does 1 to 6.
 
 1. **Sector** (Yahoo search). Charts in the same sector are listed together
    at the end: taking several is one bet.
@@ -160,7 +170,18 @@ tell an edge from luck.
      line on the quarter (revenue, EPS, growth against a year earlier), one
      on margins, one on anything unusual. Say whether the report looks like
      what moved the stock today.
-5. Report to the user, in this order:
+5. Report to the user. **Light mode:** the market line, what was scanned
+   (daily list, uptrend charts, fetched, usable, broke out, dropped by each
+   filter, kept), then each chart as printed: ticker, breakout time, price,
+   % over the range high, range width, breakout volume, sector, move vs
+   yesterday, daily setup, and its news. Headlines are leads: say which ones
+   are about the company itself and which are roundups that only mention
+   it; a story that matters (an offering, a downgrade, a deal) gets one line
+   on why it may matter today, quoted as a headline unless you opened it.
+   Say when a chart has no company news. If SPY is below its opening range,
+   say that breakouts fail more often on days like that. Offer
+   `/trader-entry`, `/trader-exit` and `/trader-timemachine` for any chart the
+   user picks. **Deep mode**, in this order:
    - the market line, then what was scanned: daily list size, uptrend charts,
      fetched, usable, broke out, dropped by each filter, studied, data time;
    - the three groups exactly as printed: ticker, breakout time, volume x,
