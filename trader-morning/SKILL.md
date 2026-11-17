@@ -39,6 +39,7 @@ python3 "${CLAUDE_SKILL_DIR}/morning.py" premarket   # before 9:30 ET: universe 
 python3 "${CLAUDE_SKILL_DIR}/morning.py" run         # at or after 10:15 ET: scan, filters, study every chart
 python3 "${CLAUDE_SKILL_DIR}/morning.py" review      # after the close: score today's plans, update the scorecard
 python3 "${CLAUDE_SKILL_DIR}/morning.py" review --date 2026-11-16   # score an earlier day (its report must exist)
+python3 "${CLAUDE_SKILL_DIR}/morning.py" publish --trailer "..."     # after review: the scorecard (only) straight to origin/main
 python3 "${CLAUDE_SKILL_DIR}/morning.py" run --now "2026-11-16 10:15" --daily trader/watchlist-daily-2026-11-17.json   # replay a past day (about 5 days back at most)
 ```
 
@@ -67,7 +68,7 @@ results: wait until the scorecard has a few weeks.
 | `tie_points` | 5 | a target share within 5 points of break-even is "about break-even" |
 | `replays` / `seed` | 10,000 / 19 | the Time Machine |
 | `market_symbol` | SPY | the market line on top of the list |
-| `scorecard` | journal/morning-scorecard.csv | where the review keeps every scored plan |
+| `scorecard` / `scorecard_branch` | journal/morning-scorecard.csv / main | the record of every scored plan, and the branch `publish` commits it to |
 
 ## What `run` does for each chart
 
@@ -105,7 +106,8 @@ checked first in each bar (a bar that touches both counts as the stop, as in
 the Time Machine), then the target; otherwise "neither", scored at the 15:55
 close. Results in R (multiples of the plan's risk), with and without the cost
 estimate, never in dollars. It writes `trader/morning/<date>/review.json` and
-updates the scorecard (re-running a day replaces that day's rows), then
+updates the scorecard: the rows already on `origin/main` plus this day (re-running a day replaces that
+day's rows), then
 prints the day and the running totals per group: plans, target / stop /
 neither, the real T share against the predicted one, real average R against
 the predicted average R. Under 60 plans it says the sample is too small to
@@ -179,19 +181,26 @@ tell an edge from luck.
    dollars or a profit figure. Compare honestly: did the "leans to target"
    group beat the others, and is the real T share near the predicted one?
    With fewer than 60 plans, say it is too early to tell.
-   - **Commit the scorecard after every review, without asking** (the user
-     asked for this on 2026-11-17). The scorecard is
-     `journal/morning-scorecard.csv`; a cloud container is thrown away
-     after the session, so git is where it lasts. Commit that one file only
-     (`git add journal/morning-scorecard.csv`), message "Scorecard:
-     <date>, <n> plans", with the session's commit trailers, and push it to
-     the session's working branch (retry network errors up to 4 times with
-     backoff). Never commit anything else from `trader/` (it can hold the
-     SEC contact line). Tell the user it was committed, with the commit id.
-   - The running totals only cover the rows in this checkout. A new session
-     starts from the default branch, so days scored on another branch count
-     only once that branch is merged. If the scorecard has no earlier days
-     than today, say so instead of calling it the whole record.
+   - **Publish the scorecard straight to `main` after every review, without
+     asking** (the user asked for this on 2026-11-17, standing permission for
+     scorecard-only commits to `main`). Run:
+
+     ```bash
+     python3 "${CLAUDE_SKILL_DIR}/morning.py" publish --trailer "<each commit trailer line this session uses>"
+     ```
+
+     It commits `journal/morning-scorecard.csv` and nothing else, from a
+     temporary checkout of `origin/main`, so the session's own branch and
+     working tree are not touched. It refuses if the commit would touch any
+     other file, merges rows with what `main` already has (by date and
+     symbol), and retries a refused push up to 4 times after re-reading
+     `main`. Tell the user the commit id it prints. This permission covers
+     the scorecard only: never push anything else to `main`.
+   - The record is the scorecard on `origin/main`. `review` reads it first,
+     so the running totals cover every day already published, from any
+     session. The working copy is `trader/morning/scorecard.csv`, which git
+     ignores. If `review` cannot fetch `main`, it says so, and the totals
+     cover only this checkout.
 
 ## Needs
 

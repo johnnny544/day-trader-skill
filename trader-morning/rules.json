@@ -22,5 +22,6 @@
   "news_hours": 24,
   "intraday_min_volume": 250000,
   "universe_max_age_days": 7,
-  "scorecard": "journal/morning-scorecard.csv"
+  "scorecard": "journal/morning-scorecard.csv",
+  "scorecard_branch": "main"
 }
