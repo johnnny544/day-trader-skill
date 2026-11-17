@@ -10,6 +10,9 @@
              leans-to-target / about-break-even / leans-to-stop, with a SPY market line on top.
   review     after the close: what each listed chart really did by the flat-by time (target, stop
              or neither, in R), kept in a scorecard so the odds can be checked against outcomes.
+             The record is journal/morning-scorecard.csv on origin/main; the working copy is
+             trader/morning/scorecard.csv.
+  publish    commit the scorecard (that file only) straight to origin/main from a temporary worktree.
 
 Reuses the other trader skills' scripts; standard library only. Nothing here sizes, checks or places
 an order. Writes trader/morning/<date>/ (one folder a day), trader/watchlist.json (the kept charts) and
@@ -533,6 +536,43 @@ def read_scorecard(path):
         return list(csv.DictReader(fh))
 
 
+def parse_csv(text):
+    return list(csv.DictReader(text.splitlines())) if text else []
+
+
+def git(*args, cwd=None):
+    p = subprocess.run(["git"] + list(args), cwd=cwd or ROOT, capture_output=True, text=True)
+    return p.returncode, p.stdout, p.stderr
+
+
+def main_scorecard(rules):
+    """The scorecard on origin/main (the record). -> (rows, note)."""
+    code, _, err = git("fetch", "-q", "origin", rules["scorecard_branch"])
+    if code:
+        return None, "could not fetch origin/%s (%s)" % (rules["scorecard_branch"], err.strip()[:120])
+    code, out, _ = git("show", "origin/%s:%s" % (rules["scorecard_branch"], rules["scorecard"]))
+    return (parse_csv(out) if code == 0 else []), None
+
+
+def working_copy():
+    return os.path.join(TRADER, "morning", "scorecard.csv")
+
+
+def merge_rows(base, mine):
+    """Every (date, symbol) from both; mine wins where both have it."""
+    out = {(r["date"], r["symbol"]): r for r in base}
+    out.update({(r["date"], r["symbol"]): r for r in mine})
+    return sorted(out.values(), key=lambda r: (r["date"], r["symbol"]))
+
+
+def write_scorecard(path, rows):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=FIELDS, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+
+
 def cmd_review(a, rules):
     now = ny_now(a.now)
     day = datetime.date.fromisoformat(a.date) if a.date else now.date()
@@ -574,15 +614,16 @@ def cmd_review(a, rules):
                      "R_after_costs": None if r is None or cost is None else round(r - cost, 3)})
     json.dump({"date": day.isoformat(), "flat_by": flat.strftime("%H:%M"), "rows": rows},
               open(os.path.join(folder, "review.json"), "w"), indent=1)
-    sc_path = os.path.join(ROOT, rules["scorecard"])
-    os.makedirs(os.path.dirname(sc_path), exist_ok=True)
-    old = [r for r in read_scorecard(sc_path) if r["date"] != day.isoformat()]   # re-running a day replaces it
-    allrows = sorted(old + [{k: ("" if v is None else v) for k, v in r.items()} for r in rows],
-                     key=lambda r: (r["date"], r["symbol"]))
-    with open(sc_path, "w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=FIELDS)
-        w.writeheader()
-        w.writerows(allrows)
+    # The record is the scorecard on origin/main; trader/morning/scorecard.csv is this checkout's working
+    # copy (git-ignored). `publish` commits it to main.
+    base, note = main_scorecard(rules)
+    if base is None:
+        log("Scorecard: %s; using the working copy only." % note)
+        base = read_scorecard(working_copy())
+    base = merge_rows(read_scorecard(working_copy()), base)
+    old = [r for r in base if r["date"] != day.isoformat()]   # re-running a day replaces it
+    allrows = merge_rows(old, [{k: ("" if v is None else v) for k, v in r.items()} for r in rows])
+    write_scorecard(working_copy(), allrows)
     # ---- print
     print("trader-morning review, %s: each plan on the day's real 5-minute bars until %s ET (Yahoo, can lag). "
           "Stop checked first in a bar that touched both." % (S.day_label(day), S.clock_label(flat)))
@@ -592,8 +633,9 @@ def cmd_review(a, rules):
             r["symbol"], r["tier"], pct(r["target_share"]), r["outcome"], r["exit_time"] or "-",
             "-" if r["R"] is None else "%+.2f" % r["R"], "-" if r["R_after_costs"] is None else "%+.2f" % r["R_after_costs"]))
     summarize(allrows, rules)
-    print("Scorecard: %s (%d rows). R is in multiples of each plan's risk, not dollars." % (rules["scorecard"],
-                                                                                          len(allrows)))
+    print("Scorecard: %s (%d rows, from origin/%s plus this review). R is in multiples of each plan's risk, "
+          "not dollars. Next: morning.py publish." % (os.path.relpath(working_copy(), ROOT), len(allrows),
+                                                     rules["scorecard_branch"]))
     return 0
 
 
@@ -619,17 +661,80 @@ def summarize(rows, rules):
         print("  Fewer than 60 plans: too few to tell a real edge from luck. Keep paper trading and keep scoring.")
 
 
+# ------------------------------------------------------------------ publish the scorecard to main
+
+def cmd_publish(a, rules):
+    """Commit the scorecard, and only the scorecard, straight to origin/<scorecard_branch> from a temporary
+    worktree, so the session's own branch and working tree are never touched. Retries a rejected push
+    after re-reading the remote (rows are merged by date and symbol, this checkout's rows win)."""
+    wc = working_copy()
+    mine = read_scorecard(wc)
+    if not mine:
+        raise S.ScanError("No scorecard to publish (%s). Run morning.py review first." % os.path.relpath(wc, ROOT))
+    branch, path = rules["scorecard_branch"], rules["scorecard"]
+    title = a.message or "Scorecard: %s, %d plan(s)" % (
+        max(r["date"] for r in mine), sum(1 for r in mine if r["date"] == max(r2["date"] for r2 in mine)))
+    body = "\n".join(a.trailer or [])
+    import tempfile
+    for attempt in range(1, 5):
+        tmp = tempfile.mkdtemp(prefix="scorecard-")
+        wt = os.path.join(tmp, "wt")
+        try:
+            code, _, err = git("fetch", "-q", "origin", branch)
+            if code:
+                raise S.ScanError("could not fetch origin/%s: %s" % (branch, err.strip()[:200]))
+            code, _, err = git("worktree", "add", "-q", "--detach", wt, "origin/" + branch)
+            if code:
+                raise S.ScanError("could not check out origin/%s: %s" % (branch, err.strip()[:200]))
+            code, out, _ = git("show", "origin/%s:%s" % (branch, path))
+            merged = merge_rows(parse_csv(out) if code == 0 else [], mine)
+            write_scorecard(os.path.join(wt, path), merged)
+            git("add", path, cwd=wt)
+            if git("diff", "--cached", "--quiet", cwd=wt)[0] == 0:
+                print("Nothing new to publish: origin/%s already has these %d rows." % (branch, len(merged)))
+                write_scorecard(wc, merged)
+                return 0
+            args = ["commit", "-q", "-m", title] + (["-m", body] if body else [])
+            code, _, err = git(*args, cwd=wt)
+            if code:
+                raise S.ScanError("could not commit: %s" % err.strip()[:200])
+            sha = git("rev-parse", "--short", "HEAD", cwd=wt)[1].strip()
+            files = git("show", "--name-only", "--format=", "HEAD", cwd=wt)[1].split()
+            if files != [path]:
+                raise S.ScanError("refusing to publish: the commit touches %s, not only %s" % (files, path))
+            if a.dry_run:
+                print("Dry run: would push %s (\"%s\", %s only, %d rows) to origin/%s."
+                      % (sha, title, path, len(merged), branch))
+                return 0
+            code, _, err = git("push", "-q", "origin", "HEAD:refs/heads/" + branch, cwd=wt)
+            if code == 0:
+                write_scorecard(wc, merged)
+                print("Published the scorecard to origin/%s: commit %s (\"%s\"), %s only, %d rows."
+                      % (branch, sha, title, path, len(merged)))
+                return 0
+            log("Push to origin/%s refused (attempt %d of 4): %s" % (branch, attempt, err.strip()[:160]))
+        finally:
+            git("worktree", "remove", "--force", wt)
+            shutil.rmtree(tmp, ignore_errors=True)
+        time.sleep(2 ** attempt)
+    raise S.ScanError("could not push the scorecard to origin/%s after 4 tries; it is still in %s"
+                      % (branch, os.path.relpath(wc, ROOT)))
+
+
 # ------------------------------------------------------------------ main
 
 def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("command", choices=["status", "premarket", "run", "review"])
+    p.add_argument("command", choices=["status", "premarket", "run", "review", "publish"])
     p.add_argument("--rules", default=os.path.join(HERE, "rules.json"))
     p.add_argument("--daily", help="daily list to scan (default trader/watchlist-daily-<today>.json)")
     p.add_argument("--date", help="review: the day to score, YYYY-MM-DD (default today)")
     p.add_argument("--now", help='pin the clock, New York time, e.g. "2026-11-16 10:15"')
     p.add_argument("--at", help="cut the scan at this New York time (replay a day already done)")
     p.add_argument("--offline", help="saved Yahoo 5-minute charts for the scan (tests)")
+    p.add_argument("--message", help="publish: the commit title (default \"Scorecard: <date>, <n> plans\")")
+    p.add_argument("--trailer", action="append", help="publish: a commit trailer line (repeat for more)")
+    p.add_argument("--dry-run", action="store_true", help="publish: commit in the temporary worktree, do not push")
     a = p.parse_args()
     rules = load_rules(a.rules)
     if a.command == "status":
@@ -639,6 +744,8 @@ def main():
         return 0
     if a.command == "review":
         return cmd_review(a, rules)
+    if a.command == "publish":
+        return cmd_publish(a, rules)
     return cmd_run(a, rules)
 
 
