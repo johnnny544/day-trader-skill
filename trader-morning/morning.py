@@ -375,7 +375,9 @@ def print_light(report, rules):
     if not report["sec_user_agent_set"]:
         print("SEC filings were skipped: no SEC User-Agent (SEC_USER_AGENT or trader/config.json).")
     print("Wrote %s and trader/watchlist.json." % os.path.relpath(
-        os.path.join(TRADER, "morning", report["scan"]["day"], "report.json"), ROOT))
+        os.path.join(ROOT, report["path"]), ROOT))
+    if not report.get("scored"):
+        print("This is a later run: the review after the close scores the day's first run (report.json), not this one.")
     print("Next, for any chart: /trader-entry, /trader-exit, /trader-timemachine. " + S.NOTE)
 
 
@@ -498,7 +500,14 @@ def cmd_run(a, rules):
               "rules": {k: v for k, v in rules.items() if not k.startswith("_")},
               "daily_list": os.path.relpath(daily, ROOT), "scan": sm, "market": market,
               "sector_clusters": clusters, "sec_user_agent_set": sec_ok, "results": results, "note": S.NOTE}
-    with open(os.path.join(folder, "report.json"), "w") as fh:
+    # The day's first run is the one the review scores (report.json). A later run the same day keeps its own
+    # file, report-HHMM.json, unless --replace.
+    first = os.path.join(folder, "report.json")
+    path = first if (a.replace or not os.path.exists(first)) else os.path.join(
+        folder, "report-%s.json" % cutoff.strftime("%H%M"))
+    report["path"] = os.path.relpath(path, ROOT)
+    report["scored"] = path == first
+    with open(path, "w") as fh:
         json.dump(report, fh, indent=1)
     S.write_json(os.path.join(TRADER, "watchlist.json"),
                  {"created_by": "trader-morning", "mode": "orb", "as_of": "%s %s ET" % (sm["day"], sm["cutoff"]),
@@ -576,7 +585,7 @@ def print_report(report, rules, day, cutoff):
     if not report["sec_user_agent_set"]:
         print("SEC filings and earnings numbers were skipped: no SEC User-Agent (SEC_USER_AGENT or trader/config.json).")
     print("Wrote %s and trader/watchlist.json." % os.path.relpath(
-        os.path.join(TRADER, "morning", day.isoformat(), "report.json"), ROOT))
+        os.path.join(ROOT, report["path"]), ROOT))
     print("Odds come from the last 60 days of each stock's own bars. They are not a prediction. " + S.NOTE)
 
 
@@ -809,6 +818,7 @@ def main():
     p.add_argument("--message", help="publish: the commit title (default \"Scorecard: <date>, <n> plans\")")
     p.add_argument("--trailer", action="append", help="publish: a commit trailer line (repeat for more)")
     p.add_argument("--dry-run", action="store_true", help="publish: commit in the temporary worktree, do not push")
+    p.add_argument("--replace", action="store_true", help="run: replace the day's scored report (report.json)")
     a = p.parse_args()
     rules = load_rules(a.rules)
     if a.command == "status":
